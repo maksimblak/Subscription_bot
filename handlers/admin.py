@@ -30,6 +30,7 @@ class AdminStates(StatesGroup):
     waiting_broadcast_text = State()
     waiting_mass_grant_days = State()
     waiting_mass_revoke_days = State()
+    waiting_user_id_for_grant = State()  # Для ручной выдачи доступа
 
 
 # ═══════════════════════════════════════
@@ -593,6 +594,202 @@ async def confirm_mass_revoke(callback: CallbackQuery, bot: Bot):
         f"✅ <b>Массовый отзыв завершён</b>\n\n"
         f"Канал: {channel['name']}\n"
         f"Отозвано доступов: {revoked}",
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+# ═══════════════════════════════════════
+# MANUAL GRANT (Платное ускорение)
+# ═══════════════════════════════════════
+
+@admin_router.callback_query(F.data == "users:manual_grant")
+async def manual_grant_start(callback: CallbackQuery, state: FSMContext):
+    """Начать ручную выдачу доступа."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+
+    await state.set_state(AdminStates.waiting_user_id_for_grant)
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="❌ Отмена", callback_data="admin:users")
+
+    await callback.message.edit_text(
+        "💎 <b>Ручная выдача доступа</b>\n\n"
+        "Введите ID пользователя или @username:\n\n"
+        "<i>Это позволяет выдать доступ к каналу раньше срока "
+        "(например, за оплату)</i>",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@admin_router.message(AdminStates.waiting_user_id_for_grant)
+async def process_user_for_grant(message: Message, state: FSMContext, bot: Bot):
+    """Обработка введённого user_id для выдачи доступа."""
+    if not is_admin(message.from_user.id):
+        return
+
+    user_input = message.text.strip()
+
+    # Пробуем найти пользователя
+    user = None
+
+    if user_input.startswith("@"):
+        # Поиск по username
+        username = user_input[1:]
+        users = await UserModel.get_all_users()
+        for u in users:
+            if u.get("username") and u["username"].lower() == username.lower():
+                user = u
+                break
+    else:
+        # Поиск по ID
+        try:
+            user_id = int(user_input)
+            user = await UserModel.get(user_id)
+        except ValueError:
+            await message.answer("❌ Введите корректный ID (число) или @username")
+            return
+
+    if not user:
+        await message.answer(
+            "❌ Пользователь не найден в базе.\n"
+            "Убедитесь, что он зарегистрирован через /start"
+        )
+        return
+
+    # Сохраняем user_id и показываем каналы для выбора
+    await state.update_data(grant_user_id=user["user_id"])
+    await state.clear()
+
+    # Получаем каналы, к которым у пользователя ещё нет доступа
+    channels = await ChannelModel.get_additional()
+    user_channels = await UserChannelModel.get_user_channels(user["user_id"])
+    user_channel_ids = {ch["channel_id"] for ch in user_channels}
+
+    available_channels = [ch for ch in channels if ch["channel_id"] not in user_channel_ids]
+
+    if not available_channels:
+        await message.answer(
+            f"✅ У пользователя <code>{user['user_id']}</code> уже есть доступ ко всем каналам!",
+            parse_mode="HTML"
+        )
+        return
+
+    builder = InlineKeyboardBuilder()
+    for ch in available_channels:
+        builder.button(
+            text=f"{ch.get('emoji', '📺')} {ch['name']} ({ch['days_required']}д)",
+            callback_data=f"grant_to:{user['user_id']}:{ch['channel_id']}"
+        )
+    builder.button(text="❌ Отмена", callback_data="admin:users")
+    builder.adjust(1)
+
+    username_text = f"@{user['username']}" if user.get("username") else "—"
+
+    await message.answer(
+        f"💎 <b>Выдача доступа</b>\n\n"
+        f"👤 Пользователь: <code>{user['user_id']}</code>\n"
+        f"📝 Username: {username_text}\n"
+        f"👋 Имя: {user.get('first_name', '—')}\n\n"
+        f"Выберите канал для выдачи доступа:",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+
+
+@admin_router.callback_query(F.data.startswith("grant_to:"))
+async def process_manual_grant(callback: CallbackQuery, bot: Bot):
+    """Выдать доступ к выбранному каналу."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+
+    parts = callback.data.split(":")
+    user_id = int(parts[1])
+    channel_id = int(parts[2])
+
+    user = await UserModel.get(user_id)
+    channel = await ChannelModel.get(channel_id)
+
+    if not user or not channel:
+        await callback.answer("Ошибка: пользователь или канал не найден", show_alert=True)
+        return
+
+    # Проверяем, нет ли уже доступа
+    if await UserChannelModel.has_access(user_id, channel_id):
+        await callback.answer("У пользователя уже есть доступ к этому каналу", show_alert=True)
+        return
+
+    await callback.message.edit_text("⏳ Выдаю доступ...")
+
+    subscription_service = SubscriptionService(bot)
+    invite_link = await subscription_service.grant_channel_access(user_id, channel_id)
+
+    if invite_link:
+        # Отправляем пользователю ссылку
+        try:
+            msg = await bot.send_message(
+                user_id,
+                f"🎁 <b>Вам открыт доступ к каналу!</b>\n\n"
+                f"📺 <b>{channel['name']}</b>\n\n"
+                f"🔗 Ссылка для вступления:\n{invite_link}\n\n"
+                f"⚠️ Ссылка одноразовая — используйте её сейчас!",
+                parse_mode="HTML"
+            )
+            await UserChannelModel.update_message_id(user_id, channel_id, msg.message_id)
+        except Exception as e:
+            logger.warning(f"Не удалось отправить ссылку пользователю {user_id}: {e}")
+
+        # Логируем
+        await ActionLogModel.log(
+            ActionLogModel.ADMIN_MANUAL_GRANT,
+            user_id,
+            f"channel: {channel['name']}, by_admin: {callback.from_user.id}"
+        )
+
+        builder = InlineKeyboardBuilder()
+        builder.button(text="💎 Выдать ещё", callback_data="users:manual_grant")
+        builder.button(text="◀️ Назад", callback_data="admin:users")
+        builder.adjust(2)
+
+        await callback.message.edit_text(
+            f"✅ <b>Доступ выдан!</b>\n\n"
+            f"👤 Пользователь: <code>{user_id}</code>\n"
+            f"📺 Канал: <b>{channel['name']}</b>\n\n"
+            f"Ссылка отправлена пользователю.",
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
+    else:
+        await callback.message.edit_text(
+            "❌ Ошибка при создании ссылки.\n"
+            "Убедитесь, что бот является админом канала.",
+            parse_mode="HTML"
+        )
+
+    await callback.answer()
+
+
+@admin_router.callback_query(F.data == "users:search")
+async def users_search(callback: CallbackQuery, state: FSMContext):
+    """Поиск пользователя."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+
+    await state.set_state(AdminStates.waiting_user_id_for_grant)
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="❌ Отмена", callback_data="admin:users")
+
+    await callback.message.edit_text(
+        "🔍 <b>Поиск пользователя</b>\n\n"
+        "Введите ID пользователя или @username:",
+        reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
     await callback.answer()

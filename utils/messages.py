@@ -255,6 +255,7 @@ class Messages:
             "admin_broadcast": "📢",
             "admin_mass_grant": "✅",
             "admin_mass_revoke": "❌",
+            "admin_manual_grant": "💎",
             "channel_settings_changed": "⚙️"
         }
 
@@ -325,6 +326,7 @@ class Keyboards:
     ADMIN_USERS = [
         ("📋 Список", "users:list"),
         ("🔍 Найти", "users:search"),
+        ("💎 Выдать доступ", "users:manual_grant"),
         ("✅ Массовая выдача", "users:mass_grant"),
         ("❌ Массовый отзыв", "users:mass_revoke"),
         ("◀️ Назад", "admin:back"),

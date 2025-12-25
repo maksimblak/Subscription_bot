@@ -220,6 +220,7 @@ class ActionLogModel:
     ADMIN_BROADCAST = "admin_broadcast"
     ADMIN_MASS_GRANT = "admin_mass_grant"
     ADMIN_MASS_REVOKE = "admin_mass_revoke"
+    ADMIN_MANUAL_GRANT = "admin_manual_grant"  # Ручная выдача доступа (платное ускорение)
     CHANNEL_SETTINGS_CHANGED = "channel_settings_changed"
 
     @staticmethod
