@@ -940,12 +940,9 @@ async def process_user_for_bonus(message: Message, state: FSMContext):
     user = None
 
     if user_input.startswith("@"):
+        # Поиск по username (эффективный запрос с индексом)
         username = user_input[1:]
-        users = await UserModel.get_all_users()
-        for u in users:
-            if u.get("username") and u["username"].lower() == username.lower():
-                user = u
-                break
+        user = await UserModel.get_by_username(username)
     else:
         try:
             user_id = int(user_input)
@@ -1047,12 +1044,9 @@ async def process_user_for_ban(message: Message, state: FSMContext):
     user = None
 
     if user_input.startswith("@"):
+        # Поиск по username (эффективный запрос с индексом)
         username = user_input[1:]
-        users = await UserModel.get_all_users()
-        for u in users:
-            if u.get("username") and u["username"].lower() == username.lower():
-                user = u
-                break
+        user = await UserModel.get_by_username(username)
     else:
         try:
             user_id = int(user_input)
@@ -1343,7 +1337,7 @@ async def scheduled_list(callback: CallbackQuery):
 
     builder = InlineKeyboardBuilder()
     for bc in upcoming[:10]:
-        scheduled_at = datetime.fromisoformat(bc["scheduled_at"]) if isinstance(bc["scheduled_at"], str) else bc["scheduled_at"]
+        scheduled_at = parse_date(bc["scheduled_at"]) or datetime.now()
         builder.button(
             text=f"🗑 {scheduled_at.strftime('%d.%m %H:%M')}",
             callback_data=f"scheduled:delete:{bc['id']}"
@@ -1353,7 +1347,7 @@ async def scheduled_list(callback: CallbackQuery):
 
     text = "📋 <b>Запланированные рассылки</b>\n\n"
     for bc in upcoming[:5]:
-        scheduled_at = datetime.fromisoformat(bc["scheduled_at"]) if isinstance(bc["scheduled_at"], str) else bc["scheduled_at"]
+        scheduled_at = parse_date(bc["scheduled_at"]) or datetime.now()
         text += f"• {scheduled_at.strftime('%d.%m.%Y %H:%M')}\n"
         text += f"  <i>{bc['text'][:50]}{'...' if len(bc['text']) > 50 else ''}</i>\n\n"
 
@@ -1416,7 +1410,7 @@ async def scheduled_history(callback: CallbackQuery):
 
     text = "📜 <b>История рассылок</b>\n\n"
     for bc in sent[:10]:
-        sent_at = datetime.fromisoformat(bc["sent_at"]) if isinstance(bc["sent_at"], str) else bc["sent_at"]
+        sent_at = parse_date(bc["sent_at"]) or datetime.now()
         text += (
             f"• {sent_at.strftime('%d.%m.%Y %H:%M')}\n"
             f"  📤 {bc['sent_count']} | ❌ {bc['failed_count']}\n\n"
