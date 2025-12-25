@@ -15,7 +15,7 @@ from database.models import (
 )
 from services.subscription import SubscriptionService
 from services.scheduler import SchedulerService
-from utils.helpers import is_admin
+from utils.helpers import is_admin, parse_date
 from utils.messages import Messages, Keyboards
 
 logger = logging.getLogger(__name__)
@@ -650,13 +650,9 @@ async def process_user_for_grant(message: Message, state: FSMContext, bot: Bot):
     user = None
 
     if user_input.startswith("@"):
-        # Поиск по username
+        # Поиск по username (эффективный запрос с индексом)
         username = user_input[1:]
-        users = await UserModel.get_all_users()
-        for u in users:
-            if u.get("username") and u["username"].lower() == username.lower():
-                user = u
-                break
+        user = await UserModel.get_by_username(username)
     else:
         # Поиск по ID
         try:

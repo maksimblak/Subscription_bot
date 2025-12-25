@@ -70,6 +70,15 @@ class UserModel:
         row = await db.fetchone("SELECT COUNT(*) as count FROM users")
         return row["count"] if row else 0
 
+    @staticmethod
+    async def get_by_username(username: str) -> Optional[dict]:
+        """Получить пользователя по username (без @, регистронезависимо)."""
+        row = await db.fetchone(
+            "SELECT * FROM users WHERE username = ? COLLATE NOCASE",
+            (username,)
+        )
+        return dict(row) if row else None
+
 
 class ChannelModel:
     """Модель для работы с каналами."""

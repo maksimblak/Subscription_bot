@@ -90,6 +90,7 @@ class Database:
 
             CREATE INDEX IF NOT EXISTS idx_users_active ON users(is_active);
             CREATE INDEX IF NOT EXISTS idx_users_banned ON users(is_banned);
+            CREATE INDEX IF NOT EXISTS idx_users_username ON users(username COLLATE NOCASE);
             CREATE INDEX IF NOT EXISTS idx_broadcasts_scheduled ON scheduled_broadcasts(scheduled_at, is_sent);
             CREATE INDEX IF NOT EXISTS idx_user_channels_user ON user_channels(user_id);
             CREATE INDEX IF NOT EXISTS idx_logs_user ON action_logs(user_id);
