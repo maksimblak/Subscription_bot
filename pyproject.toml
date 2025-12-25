@@ -1,0 +1,20 @@
+[project]
+name = "subscription-bot"
+version = "0.1.0"
+description = "Telegram subscription bot with progressive channel access"
+authors = [
+    {name = "maksimblak"}
+]
+readme = "README.md"
+requires-python = ">=3.10,<3.15"
+dependencies = [
+    "aiogram (>=3.23.0,<4.0.0)",
+    "aiosqlite (>=0.22.1,<0.23.0)",
+    "apscheduler (>=3.11.2,<4.0.0)",
+    "python-dotenv (>=1.2.1,<2.0.0)"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
