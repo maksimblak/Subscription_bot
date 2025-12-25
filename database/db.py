@@ -27,14 +27,17 @@ class Database:
                 first_name TEXT,
                 join_date DATETIME DEFAULT CURRENT_TIMESTAMP,
                 is_active BOOLEAN DEFAULT 1,
-                last_check DATETIME
+                last_check DATETIME,
+                notifications_enabled BOOLEAN DEFAULT 1
             );
 
             CREATE TABLE IF NOT EXISTS channels (
                 channel_id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
                 days_required INTEGER DEFAULT 0,
-                is_main BOOLEAN DEFAULT 0
+                is_main BOOLEAN DEFAULT 0,
+                description TEXT,
+                emoji TEXT DEFAULT '📺'
             );
 
             CREATE TABLE IF NOT EXISTS user_channels (
@@ -48,8 +51,24 @@ class Database:
                 UNIQUE(user_id, channel_id)
             );
 
+            CREATE TABLE IF NOT EXISTS action_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                action_type TEXT NOT NULL,
+                details TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
+
             CREATE INDEX IF NOT EXISTS idx_users_active ON users(is_active);
             CREATE INDEX IF NOT EXISTS idx_user_channels_user ON user_channels(user_id);
+            CREATE INDEX IF NOT EXISTS idx_logs_user ON action_logs(user_id);
+            CREATE INDEX IF NOT EXISTS idx_logs_type ON action_logs(action_type);
+            CREATE INDEX IF NOT EXISTS idx_logs_date ON action_logs(created_at);
         """)
         await self.connection.commit()
 

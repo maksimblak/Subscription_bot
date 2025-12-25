@@ -1,4 +1,22 @@
-from .db import Database
-from .models import UserModel, ChannelModel
+from .db import Database, db
+from .models import (
+    UserModel,
+    ChannelModel,
+    UserChannelModel,
+    ActionLogModel,
+    SettingsModel,
+    ChannelModelExtended,
+    UserModelExtended
+)
 
-__all__ = ["Database", "UserModel", "ChannelModel"]
+__all__ = [
+    "Database",
+    "db",
+    "UserModel",
+    "ChannelModel",
+    "UserChannelModel",
+    "ActionLogModel",
+    "SettingsModel",
+    "ChannelModelExtended",
+    "UserModelExtended"
+]

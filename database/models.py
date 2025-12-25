@@ -206,3 +206,256 @@ class UserChannelModel:
             (channel_id,)
         )
         return row["count"] if row else 0
+
+
+class ActionLogModel:
+    """Модель для логирования действий."""
+
+    # Типы действий
+    USER_REGISTERED = "user_registered"
+    USER_REACTIVATED = "user_reactivated"
+    USER_LEFT = "user_left"
+    CHANNEL_ACCESS_GRANTED = "channel_access_granted"
+    CHANNEL_ACCESS_REVOKED = "channel_access_revoked"
+    ADMIN_BROADCAST = "admin_broadcast"
+    ADMIN_MASS_GRANT = "admin_mass_grant"
+    ADMIN_MASS_REVOKE = "admin_mass_revoke"
+    CHANNEL_SETTINGS_CHANGED = "channel_settings_changed"
+
+    @staticmethod
+    async def log(
+        action_type: str,
+        user_id: Optional[int] = None,
+        details: Optional[str] = None
+    ):
+        """Записать действие в лог."""
+        await db.execute(
+            """
+            INSERT INTO action_logs (user_id, action_type, details, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (user_id, action_type, details, datetime.now())
+        )
+
+    @staticmethod
+    async def get_recent(limit: int = 50) -> List[dict]:
+        """Получить последние записи лога."""
+        rows = await db.fetchall(
+            """
+            SELECT al.*, u.username, u.first_name
+            FROM action_logs al
+            LEFT JOIN users u ON al.user_id = u.user_id
+            ORDER BY al.created_at DESC
+            LIMIT ?
+            """,
+            (limit,)
+        )
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    async def get_by_user(user_id: int, limit: int = 20) -> List[dict]:
+        """Получить логи по пользователю."""
+        rows = await db.fetchall(
+            """
+            SELECT * FROM action_logs
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (user_id, limit)
+        )
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    async def get_stats_by_period(days: int = 30) -> dict:
+        """Получить статистику действий за период."""
+        rows = await db.fetchall(
+            """
+            SELECT action_type, COUNT(*) as count
+            FROM action_logs
+            WHERE created_at >= datetime('now', ?)
+            GROUP BY action_type
+            """,
+            (f'-{days} days',)
+        )
+        return {row["action_type"]: row["count"] for row in rows}
+
+    @staticmethod
+    async def get_daily_stats(days: int = 30) -> List[dict]:
+        """Получить статистику по дням."""
+        rows = await db.fetchall(
+            """
+            SELECT
+                DATE(created_at) as date,
+                SUM(CASE WHEN action_type = 'user_registered' THEN 1 ELSE 0 END) as registrations,
+                SUM(CASE WHEN action_type = 'user_left' THEN 1 ELSE 0 END) as left_users,
+                SUM(CASE WHEN action_type = 'channel_access_granted' THEN 1 ELSE 0 END) as access_granted
+            FROM action_logs
+            WHERE created_at >= datetime('now', ?)
+            GROUP BY DATE(created_at)
+            ORDER BY date DESC
+            """,
+            (f'-{days} days',)
+        )
+        return [dict(row) for row in rows]
+
+
+class SettingsModel:
+    """Модель для настроек бота."""
+
+    @staticmethod
+    async def get(key: str, default: str = None) -> Optional[str]:
+        """Получить значение настройки."""
+        row = await db.fetchone(
+            "SELECT value FROM settings WHERE key = ?",
+            (key,)
+        )
+        return row["value"] if row else default
+
+    @staticmethod
+    async def set(key: str, value: str):
+        """Установить значение настройки."""
+        await db.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            (key, value)
+        )
+
+    @staticmethod
+    async def delete(key: str):
+        """Удалить настройку."""
+        await db.execute(
+            "DELETE FROM settings WHERE key = ?",
+            (key,)
+        )
+
+
+# Расширение ChannelModel
+class ChannelModelExtended(ChannelModel):
+    """Расширенная модель каналов."""
+
+    @staticmethod
+    async def update_days(channel_id: int, days_required: int):
+        """Обновить количество дней для канала."""
+        await db.execute(
+            "UPDATE channels SET days_required = ? WHERE channel_id = ?",
+            (days_required, channel_id)
+        )
+
+    @staticmethod
+    async def update_info(
+        channel_id: int,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        emoji: Optional[str] = None
+    ):
+        """Обновить информацию о канале."""
+        updates = []
+        params = []
+        if name is not None:
+            updates.append("name = ?")
+            params.append(name)
+        if description is not None:
+            updates.append("description = ?")
+            params.append(description)
+        if emoji is not None:
+            updates.append("emoji = ?")
+            params.append(emoji)
+
+        if updates:
+            params.append(channel_id)
+            await db.execute(
+                f"UPDATE channels SET {', '.join(updates)} WHERE channel_id = ?",
+                tuple(params)
+            )
+
+
+# Расширение UserModel
+class UserModelExtended(UserModel):
+    """Расширенная модель пользователей."""
+
+    @staticmethod
+    async def get_users_by_days_range(min_days: int, max_days: int) -> List[dict]:
+        """Получить пользователей по диапазону дней подписки."""
+        rows = await db.fetchall(
+            """
+            SELECT *,
+                   CAST((julianday('now') - julianday(join_date)) AS INTEGER) as days_subscribed
+            FROM users
+            WHERE is_active = 1
+            AND CAST((julianday('now') - julianday(join_date)) AS INTEGER) BETWEEN ? AND ?
+            """,
+            (min_days, max_days)
+        )
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    async def get_users_approaching_milestone(days_before: int = 3) -> List[dict]:
+        """Получить пользователей, которые скоро получат доступ к новому каналу."""
+        rows = await db.fetchall(
+            """
+            SELECT u.*,
+                   CAST((julianday('now') - julianday(u.join_date)) AS INTEGER) as days_subscribed,
+                   c.channel_id, c.name as channel_name, c.days_required, c.emoji
+            FROM users u
+            CROSS JOIN channels c
+            WHERE u.is_active = 1
+            AND c.is_main = 0
+            AND u.notifications_enabled = 1
+            AND c.days_required - CAST((julianday('now') - julianday(u.join_date)) AS INTEGER) BETWEEN 1 AND ?
+            AND NOT EXISTS (
+                SELECT 1 FROM user_channels uc
+                WHERE uc.user_id = u.user_id AND uc.channel_id = c.channel_id
+            )
+            ORDER BY u.user_id, c.days_required
+            """,
+            (days_before,)
+        )
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    async def toggle_notifications(user_id: int, enabled: bool):
+        """Включить/выключить уведомления для пользователя."""
+        await db.execute(
+            "UPDATE users SET notifications_enabled = ? WHERE user_id = ?",
+            (enabled, user_id)
+        )
+
+    @staticmethod
+    async def get_retention_stats() -> dict:
+        """Получить статистику удержания."""
+        # Общее количество
+        total = await db.fetchone("SELECT COUNT(*) as count FROM users")
+        total_count = total["count"] if total else 0
+
+        # Активные
+        active = await db.fetchone("SELECT COUNT(*) as count FROM users WHERE is_active = 1")
+        active_count = active["count"] if active else 0
+
+        # По периодам
+        periods = await db.fetchall(
+            """
+            SELECT
+                CASE
+                    WHEN days < 7 THEN '0-7 дней'
+                    WHEN days < 30 THEN '7-30 дней'
+                    WHEN days < 60 THEN '30-60 дней'
+                    WHEN days < 90 THEN '60-90 дней'
+                    ELSE '90+ дней'
+                END as period,
+                COUNT(*) as count
+            FROM (
+                SELECT CAST((julianday('now') - julianday(join_date)) AS INTEGER) as days
+                FROM users WHERE is_active = 1
+            )
+            GROUP BY period
+            ORDER BY MIN(days)
+            """
+        )
+
+        return {
+            "total": total_count,
+            "active": active_count,
+            "inactive": total_count - active_count,
+            "retention_rate": round(active_count / total_count * 100, 1) if total_count > 0 else 0,
+            "by_period": [dict(row) for row in periods]
+        }
