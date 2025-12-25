@@ -7,7 +7,7 @@ from aiogram.exceptions import TelegramBadRequest
 
 from config import MAIN_CHANNEL_ID, CHANNELS_CONFIG
 from database.models import UserModel, ChannelModel, UserChannelModel
-from utils.helpers import days_since
+from utils.helpers import days_since, parse_date
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +70,10 @@ class SubscriptionService:
 
             return invite_link.invite_link
         except TelegramBadRequest as e:
-            logger.error(f"Ошибка при создании invite link для канала {channel_id}: {e}")
+            logger.error(f"Ошибка Telegram при создании invite link для канала {channel_id}: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Неожиданная ошибка при создании invite link для канала {channel_id}: {e}")
             return None
 
     async def revoke_user_access(self, user_id: int) -> List[int]:
@@ -109,7 +112,10 @@ class SubscriptionService:
         if not user or not user["is_active"]:
             return []
 
-        join_date = datetime.fromisoformat(user["join_date"]) if isinstance(user["join_date"], str) else user["join_date"]
+        join_date = parse_date(user["join_date"])
+        if join_date is None:
+            logger.warning(f"Невозможно распарсить дату для пользователя {user_id}: {user['join_date']}")
+            return []
         days_subscribed = days_since(join_date)
 
         available = []
@@ -127,8 +133,8 @@ class SubscriptionService:
         if not user:
             return {"exists": False}
 
-        join_date = datetime.fromisoformat(user["join_date"]) if isinstance(user["join_date"], str) else user["join_date"]
-        days_subscribed = days_since(join_date)
+        join_date = parse_date(user["join_date"])
+        days_subscribed = days_since(join_date) if join_date else 0
         user_channels = await UserChannelModel.get_user_channels(user_id)
 
         return {
