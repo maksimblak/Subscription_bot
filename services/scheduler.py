@@ -5,7 +5,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest
 
 from config import SCHEDULER_HOUR, SCHEDULER_MINUTE
-from database.models import UserModelExtended, ActionLogModel
+from database.models import UserModel, UserModelExtended, ActionLogModel, ScheduledBroadcastModel
 from services.subscription import SubscriptionService
 from utils.messages import Messages
 
@@ -68,6 +68,57 @@ class SchedulerService:
         except Exception as e:
             logger.error(f"Ошибка при отправке уведомлений: {e}")
 
+    async def process_scheduled_broadcasts(self):
+        """Обработка и отправка запланированных рассылок."""
+        logger.info("Проверка запланированных рассылок...")
+
+        try:
+            # Получаем рассылки, время которых наступило
+            pending = await ScheduledBroadcastModel.get_pending()
+
+            for broadcast in pending:
+                broadcast_id = broadcast["id"]
+                text = broadcast["text"]
+
+                logger.info(f"Отправка запланированной рассылки #{broadcast_id}")
+
+                # Получаем активных пользователей (не забаненных)
+                users = await UserModel.get_active_users()
+                sent = 0
+                failed = 0
+
+                for user in users:
+                    # Пропускаем забаненных
+                    if user.get("is_banned"):
+                        continue
+
+                    try:
+                        await self.bot.send_message(
+                            user["user_id"],
+                            text,
+                            parse_mode="HTML"
+                        )
+                        sent += 1
+                    except Exception:
+                        failed += 1
+
+                # Отмечаем рассылку как отправленную
+                await ScheduledBroadcastModel.mark_sent(broadcast_id, sent, failed)
+
+                await ActionLogModel.log(
+                    ActionLogModel.SCHEDULED_BROADCAST_SENT,
+                    None,
+                    f"id: {broadcast_id}, sent: {sent}, failed: {failed}"
+                )
+
+                logger.info(f"Рассылка #{broadcast_id} завершена: отправлено {sent}, ошибок {failed}")
+
+            # Очистка старых рассылок (старше 30 дней)
+            await ScheduledBroadcastModel.delete_old_sent(30)
+
+        except Exception as e:
+            logger.error(f"Ошибка при обработке запланированных рассылок: {e}")
+
     def start(self):
         """Запуск планировщика."""
         # Ежедневная проверка подписок
@@ -87,11 +138,20 @@ class SchedulerService:
             replace_existing=True
         )
 
+        # Проверка запланированных рассылок каждую минуту
+        self.scheduler.add_job(
+            self.process_scheduled_broadcasts,
+            CronTrigger(minute="*"),  # Каждую минуту
+            id="scheduled_broadcasts",
+            replace_existing=True
+        )
+
         self.scheduler.start()
         logger.info(
             f"Планировщик запущен. "
             f"Ежедневная проверка в {SCHEDULER_HOUR:02d}:{SCHEDULER_MINUTE:02d}, "
-            f"уведомления в {notification_hour:02d}:{SCHEDULER_MINUTE:02d}"
+            f"уведомления в {notification_hour:02d}:{SCHEDULER_MINUTE:02d}, "
+            f"рассылки проверяются каждую минуту"
         )
 
     def stop(self):

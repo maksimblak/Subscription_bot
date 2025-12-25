@@ -40,6 +40,18 @@ async def cmd_start(message: Message, bot: Bot):
     username = message.from_user.username
     first_name = message.from_user.first_name or "Пользователь"
 
+    # Проверяем, не забанен ли пользователь
+    if await UserModelExtended.is_banned(user_id):
+        user = await UserModel.get(user_id)
+        reason = user.get("ban_reason") if user else None
+        await message.answer(
+            f"🚫 <b>Ваш доступ заблокирован</b>\n\n"
+            f"Причина: {reason or 'не указана'}\n\n"
+            f"Для разблокировки обратитесь к администратору.",
+            parse_mode="HTML"
+        )
+        return
+
     subscription_service = SubscriptionService(bot)
 
     # Проверяем подписку на материнский канал
@@ -285,7 +297,9 @@ async def on_user_left(event: ChatMemberUpdated, bot: Bot):
     if event.chat.id != MAIN_CHANNEL_ID:
         return
 
-    user_id = event.from_user.id
+    # Используем new_chat_member.user.id - это ID пользователя, чей статус изменился
+    # event.from_user.id может быть ID админа, который кикнул пользователя
+    user_id = event.new_chat_member.user.id
     logger.info(f"Пользователь {user_id} отписался от материнского канала")
 
     subscription_service = SubscriptionService(bot)
@@ -320,7 +334,8 @@ async def on_user_joined(event: ChatMemberUpdated, bot: Bot):
     if event.chat.id != MAIN_CHANNEL_ID:
         return
 
-    user_id = event.from_user.id
+    # Используем new_chat_member.user.id - это ID пользователя, чей статус изменился
+    user_id = event.new_chat_member.user.id
     logger.info(f"Пользователь {user_id} подписался на материнский канал")
 
     try:

@@ -1,5 +1,8 @@
+import logging
 import aiosqlite
 from config import DATABASE_PATH
+
+logger = logging.getLogger(__name__)
 
 
 class Database:
@@ -9,9 +12,15 @@ class Database:
 
     async def connect(self):
         """Подключение к базе данных."""
-        self.connection = await aiosqlite.connect(self.db_path)
-        self.connection.row_factory = aiosqlite.Row
-        await self._create_tables()
+        try:
+            self.connection = await aiosqlite.connect(self.db_path)
+            self.connection.row_factory = aiosqlite.Row
+            await self._create_tables()
+            await self._apply_migrations()
+            logger.info(f"База данных подключена: {self.db_path}")
+        except Exception as e:
+            logger.error(f"Ошибка подключения к базе данных: {e}")
+            raise
 
     async def disconnect(self):
         """Отключение от базы данных."""
@@ -28,7 +37,10 @@ class Database:
                 join_date DATETIME DEFAULT CURRENT_TIMESTAMP,
                 is_active BOOLEAN DEFAULT 1,
                 last_check DATETIME,
-                notifications_enabled BOOLEAN DEFAULT 1
+                notifications_enabled BOOLEAN DEFAULT 1,
+                bonus_days INTEGER DEFAULT 0,
+                is_banned BOOLEAN DEFAULT 0,
+                ban_reason TEXT
             );
 
             CREATE TABLE IF NOT EXISTS channels (
@@ -64,12 +76,47 @@ class Database:
                 value TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS scheduled_broadcasts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text TEXT NOT NULL,
+                scheduled_at DATETIME NOT NULL,
+                created_by INTEGER NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                is_sent BOOLEAN DEFAULT 0,
+                sent_at DATETIME,
+                sent_count INTEGER DEFAULT 0,
+                failed_count INTEGER DEFAULT 0
+            );
+
             CREATE INDEX IF NOT EXISTS idx_users_active ON users(is_active);
+            CREATE INDEX IF NOT EXISTS idx_users_banned ON users(is_banned);
+            CREATE INDEX IF NOT EXISTS idx_broadcasts_scheduled ON scheduled_broadcasts(scheduled_at, is_sent);
             CREATE INDEX IF NOT EXISTS idx_user_channels_user ON user_channels(user_id);
             CREATE INDEX IF NOT EXISTS idx_logs_user ON action_logs(user_id);
             CREATE INDEX IF NOT EXISTS idx_logs_type ON action_logs(action_type);
             CREATE INDEX IF NOT EXISTS idx_logs_date ON action_logs(created_at);
         """)
+        await self.connection.commit()
+
+    async def _apply_migrations(self):
+        """Применение миграций для существующих баз данных."""
+        # Проверяем и добавляем новые колонки в users
+        cursor = await self.connection.execute("PRAGMA table_info(users)")
+        columns = {row[1] for row in await cursor.fetchall()}
+
+        if "bonus_days" not in columns:
+            await self.connection.execute(
+                "ALTER TABLE users ADD COLUMN bonus_days INTEGER DEFAULT 0"
+            )
+        if "is_banned" not in columns:
+            await self.connection.execute(
+                "ALTER TABLE users ADD COLUMN is_banned BOOLEAN DEFAULT 0"
+            )
+        if "ban_reason" not in columns:
+            await self.connection.execute(
+                "ALTER TABLE users ADD COLUMN ban_reason TEXT"
+            )
+
         await self.connection.commit()
 
     async def execute(self, query: str, params: tuple = ()):

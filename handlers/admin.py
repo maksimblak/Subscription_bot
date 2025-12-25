@@ -7,9 +7,11 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from config import ADMIN_IDS, CHANNELS_CONFIG, MAIN_CHANNEL_ID
+from datetime import datetime
 from database.models import (
     UserModel, ChannelModel, UserChannelModel,
-    ActionLogModel, UserModelExtended, ChannelModelExtended
+    ActionLogModel, UserModelExtended, ChannelModelExtended,
+    ScheduledBroadcastModel
 )
 from services.subscription import SubscriptionService
 from services.scheduler import SchedulerService
@@ -31,6 +33,12 @@ class AdminStates(StatesGroup):
     waiting_mass_grant_days = State()
     waiting_mass_revoke_days = State()
     waiting_user_id_for_grant = State()  # Для ручной выдачи доступа
+    waiting_user_id_for_bonus = State()  # Для начисления бонусных дней
+    waiting_bonus_days = State()  # Ввод количества бонусных дней
+    waiting_user_id_for_ban = State()  # Для бана пользователя
+    waiting_ban_reason = State()  # Причина бана
+    waiting_scheduled_text = State()  # Текст отложенной рассылки
+    waiting_scheduled_datetime = State()  # Дата и время рассылки
 
 
 # ═══════════════════════════════════════
@@ -571,18 +579,22 @@ async def confirm_mass_revoke(callback: CallbackQuery, bot: Bot):
 
     await callback.message.edit_text("⏳ Выполняется отзыв доступа...")
 
-    # Получаем всех пользователей с доступом
-    users = await UserModel.get_active_users()
+    # Получаем всех пользователей с доступом к этому каналу
+    users_with_access = await UserChannelModel.get_users_with_channel_access(channel_id)
     revoked = 0
 
-    for user in users:
-        if await UserChannelModel.has_access(user["user_id"], channel_id):
-            try:
-                await bot.ban_chat_member(channel_id, user["user_id"])
-                await bot.unban_chat_member(channel_id, user["user_id"], only_if_banned=True)
-                revoked += 1
-            except Exception:
-                pass
+    for user_data in users_with_access:
+        user_id = user_data["user_id"]
+        try:
+            # Удаляем из канала
+            await bot.ban_chat_member(channel_id, user_id)
+            await bot.unban_chat_member(channel_id, user_id, only_if_banned=True)
+            # Удаляем запись из БД
+            await UserChannelModel.revoke_access(user_id, channel_id)
+            revoked += 1
+        except Exception:
+            # Даже при ошибке Telegram удаляем из БД
+            await UserChannelModel.revoke_access(user_id, channel_id)
 
     await ActionLogModel.log(
         ActionLogModel.ADMIN_MASS_REVOKE,
@@ -661,8 +673,7 @@ async def process_user_for_grant(message: Message, state: FSMContext, bot: Bot):
         )
         return
 
-    # Сохраняем user_id и показываем каналы для выбора
-    await state.update_data(grant_user_id=user["user_id"])
+    # Очищаем состояние FSM (user_id передаётся через callback_data)
     await state.clear()
 
     # Получаем каналы, к которым у пользователя ещё нет доступа
@@ -895,3 +906,529 @@ async def do_broadcast(message: Message, bot: Bot, text: str):
         f"❌ Ошибок: <b>{failed}</b>",
         parse_mode="HTML"
     )
+
+
+# ═══════════════════════════════════════
+# BONUS DAYS (Бонусные дни)
+# ═══════════════════════════════════════
+
+@admin_router.callback_query(F.data == "users:bonus_days")
+async def bonus_days_start(callback: CallbackQuery, state: FSMContext):
+    """Начать начисление бонусных дней."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+
+    await state.set_state(AdminStates.waiting_user_id_for_bonus)
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="❌ Отмена", callback_data="admin:users")
+
+    await callback.message.edit_text(
+        "🎁 <b>Начисление бонусных дней</b>\n\n"
+        "Введите ID пользователя или @username:\n\n"
+        "<i>Бонусные дни добавляются к реальным дням подписки</i>",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@admin_router.message(AdminStates.waiting_user_id_for_bonus)
+async def process_user_for_bonus(message: Message, state: FSMContext):
+    """Обработка пользователя для начисления бонусов."""
+    if not is_admin(message.from_user.id):
+        return
+
+    user_input = message.text.strip()
+    user = None
+
+    if user_input.startswith("@"):
+        username = user_input[1:]
+        users = await UserModel.get_all_users()
+        for u in users:
+            if u.get("username") and u["username"].lower() == username.lower():
+                user = u
+                break
+    else:
+        try:
+            user_id = int(user_input)
+            user = await UserModel.get(user_id)
+        except ValueError:
+            await message.answer("❌ Введите корректный ID (число) или @username")
+            return
+
+    if not user:
+        await message.answer("❌ Пользователь не найден в базе")
+        return
+
+    await state.update_data(bonus_user_id=user["user_id"])
+    await state.set_state(AdminStates.waiting_bonus_days)
+
+    current_bonus = user.get("bonus_days", 0) or 0
+    effective_days = await UserModelExtended.get_effective_days(user["user_id"])
+
+    await message.answer(
+        f"🎁 <b>Начисление бонусных дней</b>\n\n"
+        f"👤 Пользователь: <code>{user['user_id']}</code>\n"
+        f"📅 Текущих бонусов: <b>{current_bonus}</b> дн.\n"
+        f"📊 Эффективных дней: <b>{effective_days}</b>\n\n"
+        f"Введите количество дней для начисления:\n"
+        f"<i>(отрицательное число уберёт дни)</i>",
+        parse_mode="HTML"
+    )
+
+
+@admin_router.message(AdminStates.waiting_bonus_days)
+async def process_bonus_days(message: Message, state: FSMContext):
+    """Обработка количества бонусных дней."""
+    if not is_admin(message.from_user.id):
+        return
+
+    try:
+        days = int(message.text.strip())
+    except ValueError:
+        await message.answer("❌ Введите корректное число")
+        return
+
+    data = await state.get_data()
+    user_id = data.get("bonus_user_id")
+    await state.clear()
+
+    new_bonus = await UserModelExtended.add_bonus_days(user_id, days)
+
+    await ActionLogModel.log(
+        ActionLogModel.BONUS_DAYS_ADDED if days > 0 else ActionLogModel.BONUS_DAYS_REMOVED,
+        user_id,
+        f"days: {days}, new_total: {new_bonus}, by_admin: {message.from_user.id}"
+    )
+
+    action = "начислено" if days > 0 else "снято"
+    await message.answer(
+        f"✅ <b>Бонусные дни {action}!</b>\n\n"
+        f"👤 Пользователь: <code>{user_id}</code>\n"
+        f"📊 Изменение: <b>{days:+}</b> дн.\n"
+        f"🎁 Всего бонусов: <b>{new_bonus}</b> дн.",
+        parse_mode="HTML"
+    )
+
+
+# ═══════════════════════════════════════
+# BAN/UNBAN (Блокировка пользователей)
+# ═══════════════════════════════════════
+
+@admin_router.callback_query(F.data == "users:ban")
+async def ban_user_start(callback: CallbackQuery, state: FSMContext):
+    """Начать блокировку пользователя."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+
+    await state.set_state(AdminStates.waiting_user_id_for_ban)
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📋 Список забаненных", callback_data="users:banned_list")
+    builder.button(text="❌ Отмена", callback_data="admin:users")
+    builder.adjust(1)
+
+    await callback.message.edit_text(
+        "🚫 <b>Блокировка пользователя</b>\n\n"
+        "Введите ID пользователя или @username:\n\n"
+        "<i>Заблокированный пользователь не сможет использовать бота</i>",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@admin_router.message(AdminStates.waiting_user_id_for_ban)
+async def process_user_for_ban(message: Message, state: FSMContext):
+    """Обработка пользователя для бана."""
+    if not is_admin(message.from_user.id):
+        return
+
+    user_input = message.text.strip()
+    user = None
+
+    if user_input.startswith("@"):
+        username = user_input[1:]
+        users = await UserModel.get_all_users()
+        for u in users:
+            if u.get("username") and u["username"].lower() == username.lower():
+                user = u
+                break
+    else:
+        try:
+            user_id = int(user_input)
+            user = await UserModel.get(user_id)
+        except ValueError:
+            await message.answer("❌ Введите корректный ID (число) или @username")
+            return
+
+    if not user:
+        await message.answer("❌ Пользователь не найден в базе")
+        return
+
+    if user.get("is_banned"):
+        builder = InlineKeyboardBuilder()
+        builder.button(text="🔓 Разблокировать", callback_data=f"unban:{user['user_id']}")
+        builder.button(text="❌ Отмена", callback_data="admin:users")
+        builder.adjust(2)
+
+        await state.clear()
+        await message.answer(
+            f"⚠️ Пользователь <code>{user['user_id']}</code> уже заблокирован!\n\n"
+            f"Причина: {user.get('ban_reason') or 'не указана'}",
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
+        return
+
+    await state.update_data(ban_user_id=user["user_id"])
+    await state.set_state(AdminStates.waiting_ban_reason)
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="⏩ Без причины", callback_data=f"ban_now:{user['user_id']}")
+    builder.button(text="❌ Отмена", callback_data="admin:users")
+    builder.adjust(1)
+
+    await message.answer(
+        f"🚫 <b>Блокировка пользователя</b>\n\n"
+        f"👤 <code>{user['user_id']}</code> | @{user.get('username') or '—'}\n\n"
+        f"Введите причину блокировки (или нажмите кнопку ниже):",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+
+
+@admin_router.message(AdminStates.waiting_ban_reason)
+async def process_ban_reason(message: Message, state: FSMContext, bot: Bot):
+    """Обработка причины бана."""
+    if not is_admin(message.from_user.id):
+        return
+
+    data = await state.get_data()
+    user_id = data.get("ban_user_id")
+    reason = message.text.strip()
+
+    await state.clear()
+    await do_ban_user(message, user_id, reason)
+
+
+@admin_router.callback_query(F.data.startswith("ban_now:"))
+async def ban_without_reason(callback: CallbackQuery, state: FSMContext):
+    """Забанить без причины."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+
+    user_id = int(callback.data.split(":")[1])
+    await state.clear()
+    await do_ban_user(callback.message, user_id, None)
+    await callback.answer()
+
+
+async def do_ban_user(message: Message, user_id: int, reason: str = None):
+    """Выполнить бан пользователя."""
+    await UserModelExtended.ban_user(user_id, reason)
+
+    await ActionLogModel.log(
+        ActionLogModel.USER_BANNED,
+        user_id,
+        f"reason: {reason or 'not specified'}"
+    )
+
+    await message.answer(
+        f"🚫 <b>Пользователь заблокирован!</b>\n\n"
+        f"👤 ID: <code>{user_id}</code>\n"
+        f"📝 Причина: {reason or 'не указана'}",
+        parse_mode="HTML"
+    )
+
+
+@admin_router.callback_query(F.data.startswith("unban:"))
+async def unban_user(callback: CallbackQuery):
+    """Разблокировать пользователя."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+
+    user_id = int(callback.data.split(":")[1])
+    await UserModelExtended.unban_user(user_id)
+
+    await ActionLogModel.log(
+        ActionLogModel.USER_UNBANNED,
+        user_id,
+        f"by_admin: {callback.from_user.id}"
+    )
+
+    await callback.message.edit_text(
+        f"✅ <b>Пользователь разблокирован!</b>\n\n"
+        f"👤 ID: <code>{user_id}</code>",
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@admin_router.callback_query(F.data == "users:banned_list")
+async def banned_list(callback: CallbackQuery):
+    """Список заблокированных пользователей."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+
+    banned = await UserModelExtended.get_banned_users()
+
+    if not banned:
+        builder = InlineKeyboardBuilder()
+        builder.button(text="◀️ Назад", callback_data="admin:users")
+        await callback.message.edit_text(
+            "✅ Нет заблокированных пользователей",
+            reply_markup=builder.as_markup()
+        )
+        await callback.answer()
+        return
+
+    builder = InlineKeyboardBuilder()
+    for user in banned[:10]:
+        username = f"@{user['username']}" if user.get("username") else f"ID:{user['user_id']}"
+        builder.button(text=f"🔓 {username}", callback_data=f"unban:{user['user_id']}")
+    builder.button(text="◀️ Назад", callback_data="admin:users")
+    builder.adjust(1)
+
+    await callback.message.edit_text(
+        f"🚫 <b>Заблокированные пользователи</b>\n\n"
+        f"Всего: {len(banned)}\n\n"
+        f"Нажмите на пользователя для разблокировки:",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+# ═══════════════════════════════════════
+# SCHEDULED BROADCASTS (Отложенные рассылки)
+# ═══════════════════════════════════════
+
+@admin_router.callback_query(F.data == "admin:scheduled")
+async def scheduled_menu(callback: CallbackQuery):
+    """Меню отложенных рассылок."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+
+    upcoming = await ScheduledBroadcastModel.get_upcoming()
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="➕ Создать рассылку", callback_data="scheduled:create")
+    if upcoming:
+        builder.button(text=f"📋 Ожидают ({len(upcoming)})", callback_data="scheduled:list")
+    builder.button(text="📜 История", callback_data="scheduled:history")
+    builder.button(text="◀️ Назад", callback_data="admin:back")
+    builder.adjust(1)
+
+    await callback.message.edit_text(
+        f"⏰ <b>Отложенные рассылки</b>\n\n"
+        f"📊 Ожидают отправки: <b>{len(upcoming)}</b>",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@admin_router.callback_query(F.data == "scheduled:create")
+async def scheduled_create(callback: CallbackQuery, state: FSMContext):
+    """Создание новой отложенной рассылки."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+
+    await state.set_state(AdminStates.waiting_scheduled_text)
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="❌ Отмена", callback_data="admin:scheduled")
+
+    await callback.message.edit_text(
+        "⏰ <b>Создание отложенной рассылки</b>\n\n"
+        "Шаг 1/2: Введите текст сообщения:\n\n"
+        "<i>Поддерживается HTML-форматирование</i>",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@admin_router.message(AdminStates.waiting_scheduled_text)
+async def process_scheduled_text(message: Message, state: FSMContext):
+    """Обработка текста отложенной рассылки."""
+    if not is_admin(message.from_user.id):
+        return
+
+    await state.update_data(scheduled_text=message.text)
+    await state.set_state(AdminStates.waiting_scheduled_datetime)
+
+    await message.answer(
+        "⏰ <b>Создание отложенной рассылки</b>\n\n"
+        "Шаг 2/2: Введите дату и время отправки:\n\n"
+        "Формат: <code>ДД.ММ.ГГГГ ЧЧ:ММ</code>\n"
+        "Пример: <code>25.12.2024 10:00</code>\n\n"
+        "<i>Время по Москве (UTC+3)</i>",
+        parse_mode="HTML"
+    )
+
+
+@admin_router.message(AdminStates.waiting_scheduled_datetime)
+async def process_scheduled_datetime(message: Message, state: FSMContext):
+    """Обработка даты и времени рассылки."""
+    if not is_admin(message.from_user.id):
+        return
+
+    try:
+        scheduled_at = datetime.strptime(message.text.strip(), "%d.%m.%Y %H:%M")
+    except ValueError:
+        await message.answer(
+            "❌ Неверный формат!\n\n"
+            "Используйте: <code>ДД.ММ.ГГГГ ЧЧ:ММ</code>\n"
+            "Например: <code>25.12.2024 10:00</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    if scheduled_at <= datetime.now():
+        await message.answer("❌ Дата должна быть в будущем!")
+        return
+
+    data = await state.get_data()
+    text = data.get("scheduled_text")
+    await state.clear()
+
+    broadcast_id = await ScheduledBroadcastModel.create(
+        text=text,
+        scheduled_at=scheduled_at,
+        created_by=message.from_user.id
+    )
+
+    await ActionLogModel.log(
+        ActionLogModel.SCHEDULED_BROADCAST_CREATED,
+        message.from_user.id,
+        f"id: {broadcast_id}, scheduled_at: {scheduled_at}"
+    )
+
+    await message.answer(
+        f"✅ <b>Рассылка запланирована!</b>\n\n"
+        f"📅 Дата: <b>{scheduled_at.strftime('%d.%m.%Y %H:%M')}</b>\n"
+        f"🆔 ID: <code>{broadcast_id}</code>\n\n"
+        f"📝 Текст:\n{text[:200]}{'...' if len(text) > 200 else ''}",
+        parse_mode="HTML"
+    )
+
+
+@admin_router.callback_query(F.data == "scheduled:list")
+async def scheduled_list(callback: CallbackQuery):
+    """Список ожидающих рассылок."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+
+    upcoming = await ScheduledBroadcastModel.get_upcoming()
+
+    if not upcoming:
+        builder = InlineKeyboardBuilder()
+        builder.button(text="➕ Создать", callback_data="scheduled:create")
+        builder.button(text="◀️ Назад", callback_data="admin:scheduled")
+        builder.adjust(2)
+
+        await callback.message.edit_text(
+            "📋 Нет запланированных рассылок",
+            reply_markup=builder.as_markup()
+        )
+        await callback.answer()
+        return
+
+    builder = InlineKeyboardBuilder()
+    for bc in upcoming[:10]:
+        scheduled_at = datetime.fromisoformat(bc["scheduled_at"]) if isinstance(bc["scheduled_at"], str) else bc["scheduled_at"]
+        builder.button(
+            text=f"🗑 {scheduled_at.strftime('%d.%m %H:%M')}",
+            callback_data=f"scheduled:delete:{bc['id']}"
+        )
+    builder.button(text="◀️ Назад", callback_data="admin:scheduled")
+    builder.adjust(1)
+
+    text = "📋 <b>Запланированные рассылки</b>\n\n"
+    for bc in upcoming[:5]:
+        scheduled_at = datetime.fromisoformat(bc["scheduled_at"]) if isinstance(bc["scheduled_at"], str) else bc["scheduled_at"]
+        text += f"• {scheduled_at.strftime('%d.%m.%Y %H:%M')}\n"
+        text += f"  <i>{bc['text'][:50]}{'...' if len(bc['text']) > 50 else ''}</i>\n\n"
+
+    await callback.message.edit_text(
+        text + "\nНажмите для удаления:",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@admin_router.callback_query(F.data.startswith("scheduled:delete:"))
+async def scheduled_delete(callback: CallbackQuery):
+    """Удаление запланированной рассылки."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+
+    broadcast_id = int(callback.data.split(":")[2])
+    await ScheduledBroadcastModel.delete(broadcast_id)
+
+    await callback.answer("✅ Рассылка удалена", show_alert=True)
+
+    # Обновляем список
+    upcoming = await ScheduledBroadcastModel.get_upcoming()
+    if upcoming:
+        await scheduled_list(callback)
+    else:
+        builder = InlineKeyboardBuilder()
+        builder.button(text="➕ Создать", callback_data="scheduled:create")
+        builder.button(text="◀️ Назад", callback_data="admin:scheduled")
+        builder.adjust(2)
+
+        await callback.message.edit_text(
+            "📋 Нет запланированных рассылок",
+            reply_markup=builder.as_markup()
+        )
+
+
+@admin_router.callback_query(F.data == "scheduled:history")
+async def scheduled_history(callback: CallbackQuery):
+    """История отправленных рассылок."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+
+    all_broadcasts = await ScheduledBroadcastModel.get_all(20)
+    sent = [bc for bc in all_broadcasts if bc.get("is_sent")]
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="◀️ Назад", callback_data="admin:scheduled")
+
+    if not sent:
+        await callback.message.edit_text(
+            "📜 История рассылок пуста",
+            reply_markup=builder.as_markup()
+        )
+        await callback.answer()
+        return
+
+    text = "📜 <b>История рассылок</b>\n\n"
+    for bc in sent[:10]:
+        sent_at = datetime.fromisoformat(bc["sent_at"]) if isinstance(bc["sent_at"], str) else bc["sent_at"]
+        text += (
+            f"• {sent_at.strftime('%d.%m.%Y %H:%M')}\n"
+            f"  📤 {bc['sent_count']} | ❌ {bc['failed_count']}\n\n"
+        )
+
+    await callback.message.edit_text(
+        text,
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+    await callback.answer()

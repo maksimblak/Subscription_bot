@@ -256,7 +256,13 @@ class Messages:
             "admin_mass_grant": "✅",
             "admin_mass_revoke": "❌",
             "admin_manual_grant": "💎",
-            "channel_settings_changed": "⚙️"
+            "channel_settings_changed": "⚙️",
+            "user_banned": "🚫",
+            "user_unbanned": "🔓",
+            "bonus_days_added": "🎁",
+            "bonus_days_removed": "➖",
+            "scheduled_broadcast_created": "⏰",
+            "scheduled_broadcast_sent": "📨"
         }
 
         lines = []
@@ -307,6 +313,7 @@ class Keyboards:
         ("📈 Аналитика", "admin:analytics"),
         ("👥 Пользователи", "admin:users"),
         ("📺 Каналы", "admin:channels"),
+        ("⏰ Рассылки", "admin:scheduled"),
         ("📋 Логи", "admin:logs"),
         ("🔄 Проверка", "admin:run_check"),
     ]
@@ -327,6 +334,8 @@ class Keyboards:
         ("📋 Список", "users:list"),
         ("🔍 Найти", "users:search"),
         ("💎 Выдать доступ", "users:manual_grant"),
+        ("🎁 Бонусные дни", "users:bonus_days"),
+        ("🚫 Бан/Разбан", "users:ban"),
         ("✅ Массовая выдача", "users:mass_grant"),
         ("❌ Массовый отзыв", "users:mass_revoke"),
         ("◀️ Назад", "admin:back"),

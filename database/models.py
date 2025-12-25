@@ -207,6 +207,32 @@ class UserChannelModel:
         )
         return row["count"] if row else 0
 
+    @staticmethod
+    async def revoke_access(user_id: int, channel_id: int) -> bool:
+        """Отозвать доступ пользователя к конкретному каналу."""
+        try:
+            await db.execute(
+                "DELETE FROM user_channels WHERE user_id = ? AND channel_id = ?",
+                (user_id, channel_id)
+            )
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    async def get_users_with_channel_access(channel_id: int) -> List[dict]:
+        """Получить всех пользователей с доступом к каналу."""
+        rows = await db.fetchall(
+            """
+            SELECT uc.user_id, uc.message_id, u.username, u.first_name
+            FROM user_channels uc
+            JOIN users u ON uc.user_id = u.user_id
+            WHERE uc.channel_id = ?
+            """,
+            (channel_id,)
+        )
+        return [dict(row) for row in rows]
+
 
 class ActionLogModel:
     """Модель для логирования действий."""
@@ -222,6 +248,12 @@ class ActionLogModel:
     ADMIN_MASS_REVOKE = "admin_mass_revoke"
     ADMIN_MANUAL_GRANT = "admin_manual_grant"  # Ручная выдача доступа (платное ускорение)
     CHANNEL_SETTINGS_CHANGED = "channel_settings_changed"
+    USER_BANNED = "user_banned"
+    USER_UNBANNED = "user_unbanned"
+    BONUS_DAYS_ADDED = "bonus_days_added"
+    BONUS_DAYS_REMOVED = "bonus_days_removed"
+    SCHEDULED_BROADCAST_CREATED = "scheduled_broadcast_created"
+    SCHEDULED_BROADCAST_SENT = "scheduled_broadcast_sent"
 
     @staticmethod
     async def log(
@@ -460,3 +492,173 @@ class UserModelExtended(UserModel):
             "retention_rate": round(active_count / total_count * 100, 1) if total_count > 0 else 0,
             "by_period": [dict(row) for row in periods]
         }
+
+    @staticmethod
+    async def add_bonus_days(user_id: int, days: int) -> int:
+        """Добавить бонусные дни пользователю. Возвращает новое количество."""
+        await db.execute(
+            "UPDATE users SET bonus_days = COALESCE(bonus_days, 0) + ? WHERE user_id = ?",
+            (days, user_id)
+        )
+        user = await UserModel.get(user_id)
+        return user.get("bonus_days", 0) if user else 0
+
+    @staticmethod
+    async def set_bonus_days(user_id: int, days: int):
+        """Установить конкретное количество бонусных дней."""
+        await db.execute(
+            "UPDATE users SET bonus_days = ? WHERE user_id = ?",
+            (days, user_id)
+        )
+
+    @staticmethod
+    async def get_effective_days(user_id: int) -> int:
+        """Получить эффективное количество дней (реальные + бонусные)."""
+        row = await db.fetchone(
+            """
+            SELECT
+                CAST((julianday('now') - julianday(join_date)) AS INTEGER) + COALESCE(bonus_days, 0) as effective_days
+            FROM users WHERE user_id = ?
+            """,
+            (user_id,)
+        )
+        return row["effective_days"] if row else 0
+
+    @staticmethod
+    async def ban_user(user_id: int, reason: Optional[str] = None):
+        """Заблокировать пользователя."""
+        await db.execute(
+            "UPDATE users SET is_banned = 1, ban_reason = ? WHERE user_id = ?",
+            (reason, user_id)
+        )
+
+    @staticmethod
+    async def unban_user(user_id: int):
+        """Разблокировать пользователя."""
+        await db.execute(
+            "UPDATE users SET is_banned = 0, ban_reason = NULL WHERE user_id = ?",
+            (user_id,)
+        )
+
+    @staticmethod
+    async def is_banned(user_id: int) -> bool:
+        """Проверить, заблокирован ли пользователь."""
+        row = await db.fetchone(
+            "SELECT is_banned FROM users WHERE user_id = ?",
+            (user_id,)
+        )
+        return bool(row["is_banned"]) if row else False
+
+    @staticmethod
+    async def get_banned_users() -> List[dict]:
+        """Получить список заблокированных пользователей."""
+        rows = await db.fetchall(
+            "SELECT * FROM users WHERE is_banned = 1"
+        )
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    async def reactivate(user_id: int):
+        """Реактивировать пользователя (сбросить дату подписки)."""
+        await db.execute(
+            "UPDATE users SET join_date = ?, is_active = 1, bonus_days = 0 WHERE user_id = ?",
+            (datetime.now(), user_id)
+        )
+
+
+class ScheduledBroadcastModel:
+    """Модель для отложенных рассылок."""
+
+    @staticmethod
+    async def create(
+        text: str,
+        scheduled_at: datetime,
+        created_by: int
+    ) -> int:
+        """Создать отложенную рассылку. Возвращает ID."""
+        await db.execute(
+            """
+            INSERT INTO scheduled_broadcasts (text, scheduled_at, created_by, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (text, scheduled_at, created_by, datetime.now())
+        )
+        row = await db.fetchone("SELECT last_insert_rowid() as id")
+        return row["id"] if row else 0
+
+    @staticmethod
+    async def get(broadcast_id: int) -> Optional[dict]:
+        """Получить рассылку по ID."""
+        row = await db.fetchone(
+            "SELECT * FROM scheduled_broadcasts WHERE id = ?",
+            (broadcast_id,)
+        )
+        return dict(row) if row else None
+
+    @staticmethod
+    async def get_pending() -> List[dict]:
+        """Получить все ожидающие рассылки (время наступило)."""
+        rows = await db.fetchall(
+            """
+            SELECT * FROM scheduled_broadcasts
+            WHERE is_sent = 0 AND scheduled_at <= datetime('now')
+            ORDER BY scheduled_at
+            """
+        )
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    async def get_upcoming() -> List[dict]:
+        """Получить все предстоящие рассылки."""
+        rows = await db.fetchall(
+            """
+            SELECT * FROM scheduled_broadcasts
+            WHERE is_sent = 0
+            ORDER BY scheduled_at
+            """
+        )
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    async def get_all(limit: int = 20) -> List[dict]:
+        """Получить все рассылки."""
+        rows = await db.fetchall(
+            """
+            SELECT * FROM scheduled_broadcasts
+            ORDER BY scheduled_at DESC
+            LIMIT ?
+            """,
+            (limit,)
+        )
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    async def mark_sent(broadcast_id: int, sent_count: int, failed_count: int):
+        """Отметить рассылку как отправленную."""
+        await db.execute(
+            """
+            UPDATE scheduled_broadcasts
+            SET is_sent = 1, sent_at = ?, sent_count = ?, failed_count = ?
+            WHERE id = ?
+            """,
+            (datetime.now(), sent_count, failed_count, broadcast_id)
+        )
+
+    @staticmethod
+    async def delete(broadcast_id: int):
+        """Удалить рассылку."""
+        await db.execute(
+            "DELETE FROM scheduled_broadcasts WHERE id = ?",
+            (broadcast_id,)
+        )
+
+    @staticmethod
+    async def delete_old_sent(days: int = 30):
+        """Удалить старые отправленные рассылки."""
+        await db.execute(
+            """
+            DELETE FROM scheduled_broadcasts
+            WHERE is_sent = 1 AND sent_at < datetime('now', ?)
+            """,
+            (f'-{days} days',)
+        )

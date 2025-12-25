@@ -80,8 +80,14 @@ async def main():
     scheduler = SchedulerService(bot)
 
     # Регистрируем обработчики startup/shutdown
-    dp.startup.register(lambda: on_startup(bot))
-    dp.shutdown.register(lambda: on_shutdown(bot, scheduler))
+    async def startup_handler():
+        await on_startup(bot)
+
+    async def shutdown_handler():
+        await on_shutdown(bot, scheduler)
+
+    dp.startup.register(startup_handler)
+    dp.shutdown.register(shutdown_handler)
 
     # Запускаем планировщик
     scheduler.start()
