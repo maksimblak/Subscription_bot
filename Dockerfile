@@ -9,7 +9,7 @@ COPY pyproject.toml poetry.lock ./
 # Устанавливаем Poetry и зависимости
 RUN pip install poetry && \
     poetry config virtualenvs.create false && \
-    poetry install --no-dev --no-interaction --no-ansi
+    poetry install --only main --no-interaction --no-ansi
 
 # Копируем исходный код
 COPY . .
