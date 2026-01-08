@@ -93,6 +93,7 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_users_username ON users(username COLLATE NOCASE);
             CREATE INDEX IF NOT EXISTS idx_broadcasts_scheduled ON scheduled_broadcasts(scheduled_at, is_sent);
             CREATE INDEX IF NOT EXISTS idx_user_channels_user ON user_channels(user_id);
+            CREATE INDEX IF NOT EXISTS idx_user_channels_channel ON user_channels(channel_id);
             CREATE INDEX IF NOT EXISTS idx_logs_user ON action_logs(user_id);
             CREATE INDEX IF NOT EXISTS idx_logs_type ON action_logs(action_type);
             CREATE INDEX IF NOT EXISTS idx_logs_date ON action_logs(created_at);

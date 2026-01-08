@@ -44,9 +44,9 @@ class UserModel:
 
     @staticmethod
     async def get_active_users() -> List[dict]:
-        """Получить всех активных пользователей."""
+        """Получить всех активных (не забаненных) пользователей."""
         rows = await db.fetchall(
-            "SELECT * FROM users WHERE is_active = 1"
+            "SELECT * FROM users WHERE is_active = 1 AND is_banned = 0"
         )
         return [dict(row) for row in rows]
 
@@ -417,14 +417,14 @@ class UserModelExtended(UserModel):
 
     @staticmethod
     async def get_users_by_days_range(min_days: int, max_days: int) -> List[dict]:
-        """Получить пользователей по диапазону дней подписки."""
+        """Получить пользователей по диапазону дней подписки (с учетом бонусов)."""
         rows = await db.fetchall(
             """
             SELECT *,
-                   CAST((julianday('now') - julianday(join_date)) AS INTEGER) as days_subscribed
+                   CAST((julianday('now') - julianday(join_date)) AS INTEGER) + COALESCE(bonus_days, 0) as days_subscribed
             FROM users
             WHERE is_active = 1
-            AND CAST((julianday('now') - julianday(join_date)) AS INTEGER) BETWEEN ? AND ?
+            AND CAST((julianday('now') - julianday(join_date)) AS INTEGER) + COALESCE(bonus_days, 0) BETWEEN ? AND ?
             """,
             (min_days, max_days)
         )
@@ -432,18 +432,18 @@ class UserModelExtended(UserModel):
 
     @staticmethod
     async def get_users_approaching_milestone(days_before: int = 3) -> List[dict]:
-        """Получить пользователей, которые скоро получат доступ к новому каналу."""
+        """Получить пользователей, которые скоро получат доступ к новому каналу (с учетом бонусов)."""
         rows = await db.fetchall(
             """
             SELECT u.*,
-                   CAST((julianday('now') - julianday(u.join_date)) AS INTEGER) as days_subscribed,
+                   CAST((julianday('now') - julianday(u.join_date)) AS INTEGER) + COALESCE(u.bonus_days, 0) as days_subscribed,
                    c.channel_id, c.name as channel_name, c.days_required, c.emoji
             FROM users u
             CROSS JOIN channels c
             WHERE u.is_active = 1
             AND c.is_main = 0
             AND u.notifications_enabled = 1
-            AND c.days_required - CAST((julianday('now') - julianday(u.join_date)) AS INTEGER) BETWEEN 1 AND ?
+            AND c.days_required - (CAST((julianday('now') - julianday(u.join_date)) AS INTEGER) + COALESCE(u.bonus_days, 0)) BETWEEN 1 AND ?
             AND NOT EXISTS (
                 SELECT 1 FROM user_channels uc
                 WHERE uc.user_id = u.user_id AND uc.channel_id = c.channel_id

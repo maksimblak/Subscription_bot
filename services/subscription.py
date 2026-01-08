@@ -6,7 +6,7 @@ from aiogram.types import ChatMemberMember, ChatMemberAdministrator, ChatMemberO
 from aiogram.exceptions import TelegramBadRequest
 
 from config import MAIN_CHANNEL_ID, CHANNELS_CONFIG
-from database.models import UserModel, ChannelModel, UserChannelModel
+from database.models import UserModel, ChannelModel, UserChannelModel, UserModelExtended
 from utils.helpers import days_since, parse_date
 
 logger = logging.getLogger(__name__)
@@ -116,7 +116,8 @@ class SubscriptionService:
         if join_date is None:
             logger.warning(f"Невозможно распарсить дату для пользователя {user_id}: {user['join_date']}")
             return []
-        days_subscribed = days_since(join_date)
+        # Используем эффективные дни (реальные + бонусные)
+        days_subscribed = await UserModelExtended.get_effective_days(user_id)
 
         available = []
         for channel_config in CHANNELS_CONFIG:
@@ -133,8 +134,8 @@ class SubscriptionService:
         if not user:
             return {"exists": False}
 
-        join_date = parse_date(user["join_date"])
-        days_subscribed = days_since(join_date) if join_date else 0
+        # Используем эффективные дни (реальные + бонусные)
+        days_subscribed = await UserModelExtended.get_effective_days(user_id)
         user_channels = await UserChannelModel.get_user_channels(user_id)
 
         return {

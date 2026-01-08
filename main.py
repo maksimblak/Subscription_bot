@@ -65,6 +65,21 @@ async def main():
         logger.error("Не указан BOT_TOKEN! Создайте файл .env на основе .env.example")
         return
 
+    # Проверка администраторов
+    if not ADMIN_IDS:
+        logger.error("Список ADMIN_IDS пуст! Добавьте хотя бы одного администратора в .env")
+        return
+
+    # Проверка ID материнского канала
+    if MAIN_CHANNEL_ID == 0:
+        logger.error("Не указан MAIN_CHANNEL_ID! Добавьте ID материнского канала в .env")
+        return
+
+    # Проверка конфигурации каналов
+    for channel in CHANNELS_CONFIG:
+        if channel["id"] == 0:
+            logger.warning(f"Канал '{channel['name']}' имеет ID=0 и будет пропущен. Проверьте .env файл")
+
     # Создаём бота и диспетчер
     bot = Bot(
         token=BOT_TOKEN,

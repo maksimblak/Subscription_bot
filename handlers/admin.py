@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from aiogram import Router, Bot, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
@@ -7,7 +8,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from config import ADMIN_IDS, CHANNELS_CONFIG, MAIN_CHANNEL_ID
-from datetime import datetime
+from datetime import datetime, timezone
 from database.models import (
     UserModel, ChannelModel, UserChannelModel,
     ActionLogModel, UserModelExtended, ChannelModelExtended,
@@ -884,6 +885,9 @@ async def do_broadcast(message: Message, bot: Bot, text: str):
         except Exception:
             failed += 1
 
+        # Rate limiting: задержка между сообщениями для предотвращения флуда
+        await asyncio.sleep(0.05)
+
         if (i + 1) % 10 == 0:
             try:
                 await status_msg.edit_text(f"⏳ Рассылка: {i + 1}/{len(users)}...")
@@ -1274,7 +1278,8 @@ async def process_scheduled_datetime(message: Message, state: FSMContext):
         return
 
     try:
-        scheduled_at = datetime.strptime(message.text.strip(), "%d.%m.%Y %H:%M")
+        # Парсим время как UTC
+        scheduled_at = datetime.strptime(message.text.strip(), "%d.%m.%Y %H:%M").replace(tzinfo=timezone.utc)
     except ValueError:
         await message.answer(
             "❌ Неверный формат!\n\n"
@@ -1284,7 +1289,8 @@ async def process_scheduled_datetime(message: Message, state: FSMContext):
         )
         return
 
-    if scheduled_at <= datetime.now():
+    # Сравниваем с текущим временем UTC
+    if scheduled_at <= datetime.now(timezone.utc):
         await message.answer("❌ Дата должна быть в будущем!")
         return
 

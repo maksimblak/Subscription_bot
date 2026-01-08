@@ -1,6 +1,9 @@
+import logging
 from datetime import datetime
 from typing import Optional, Union
 from config import ADMIN_IDS
+
+logger = logging.getLogger(__name__)
 
 
 def is_admin(user_id: int) -> bool:
@@ -48,5 +51,6 @@ def parse_date(date_value: Union[str, datetime, None]) -> Optional[datetime]:
         try:
             return datetime.fromisoformat(date_value)
         except ValueError:
+            logger.warning(f"Не удалось распарсить дату: {date_value}")
             return None
     return None

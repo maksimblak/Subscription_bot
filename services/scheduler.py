@@ -99,7 +99,8 @@ class SchedulerService:
                             parse_mode="HTML"
                         )
                         sent += 1
-                    except Exception:
+                    except Exception as e:
+                        logger.error(f"Ошибка отправки отложенной рассылки пользователю {user['user_id']}: {e}")
                         failed += 1
 
                 # Отмечаем рассылку как отправленную
