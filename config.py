@@ -39,6 +39,11 @@ CHANNELS_CONFIG = [
         "name": os.getenv("CHANNEL_4_NAME", "Модуль 4"),
         "days_required": 93,
     },
+    {
+        "id": int(os.getenv("CHANNEL_5_ID", "0")),
+        "name": os.getenv("CHANNEL_5_NAME", "Модуль 5"),
+        "days_required": 124,
+    },
 ]
 
 # Путь к базе данных
