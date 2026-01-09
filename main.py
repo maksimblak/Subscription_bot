@@ -4,7 +4,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
-from config import BOT_TOKEN, MAIN_CHANNEL_ID, CHANNELS_CONFIG
+from config import BOT_TOKEN, MAIN_CHANNEL_ID, CHANNELS_CONFIG, ADMIN_IDS
 from database.db import db
 from database.models import ChannelModel
 from handlers.user import user_router
