@@ -829,6 +829,7 @@ async def admin_run_check(callback: CallbackQuery, bot: Bot):
         f"   • Проверено: <b>{stats['checked']}</b>\n"
         f"   • Новых доступов: <b>{stats['new_access_granted']}</b>\n"
         f"   • Деактивировано: <b>{stats['deactivated']}</b>\n"
+        f"   • Отозвано (недостаток дней): <b>{stats.get('unqualified_revoked', 0)}</b>\n"
         f"   • Ошибок: <b>{stats['errors']}</b>",
         reply_markup=builder.as_markup(),
         parse_mode="HTML"

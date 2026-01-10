@@ -28,6 +28,7 @@ class SchedulerService:
                 f"Проверка завершена: проверено {stats['checked']}, "
                 f"новых доступов {stats['new_access_granted']}, "
                 f"деактивировано {stats['deactivated']}, "
+                f"отозвано за недостаток дней {stats.get('unqualified_revoked', 0)}, "
                 f"ошибок {stats['errors']}"
             )
         except Exception as e:
