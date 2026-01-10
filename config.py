@@ -37,7 +37,12 @@ CHANNELS_CONFIG = [
     {
         "id": int(os.getenv("CHANNEL_4_ID", "0")),
         "name": os.getenv("CHANNEL_4_NAME", "Модуль 4"),
-        "days_required": 96,  # После 96 дней (96+ день)
+        "days_required": 96,  # После 96 дней (96-123 день)
+    },
+    {
+        "id": int(os.getenv("CHANNEL_5_ID", "0")),
+        "name": os.getenv("CHANNEL_5_NAME", "Модуль 5"),
+        "days_required": 124,  # После 124 дней (124+ день)
     },
 ]
 
