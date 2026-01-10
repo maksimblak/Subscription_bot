@@ -22,27 +22,22 @@ CHANNELS_CONFIG = [
     {
         "id": int(os.getenv("CHANNEL_1_ID", "0")),
         "name": os.getenv("CHANNEL_1_NAME", "Модуль 1"),
-        "days_required": 32,  # После 32 дней подписки
+        "days_required": 0,  # Сразу после подписки (0-31 день)
     },
     {
         "id": int(os.getenv("CHANNEL_2_ID", "0")),
         "name": os.getenv("CHANNEL_2_NAME", "Модуль 2"),
-        "days_required": 32,
+        "days_required": 32,  # После 32 дней (32-63 день)
     },
     {
         "id": int(os.getenv("CHANNEL_3_ID", "0")),
         "name": os.getenv("CHANNEL_3_NAME", "Модуль 3"),
-        "days_required": 62,
+        "days_required": 64,  # После 64 дней (64-95 день)
     },
     {
         "id": int(os.getenv("CHANNEL_4_ID", "0")),
         "name": os.getenv("CHANNEL_4_NAME", "Модуль 4"),
-        "days_required": 93,
-    },
-    {
-        "id": int(os.getenv("CHANNEL_5_ID", "0")),
-        "name": os.getenv("CHANNEL_5_NAME", "Модуль 5"),
-        "days_required": 124,
+        "days_required": 96,  # После 96 дней (96+ день)
     },
 ]
 
