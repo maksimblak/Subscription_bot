@@ -79,23 +79,6 @@ async def cmd_start(message: Message, bot: Bot):
             f"username: @{username}"
         )
 
-        # Выдаём доступ к первому каналу (0 дней)
-        for channel in CHANNELS_CONFIG:
-            if channel["days_required"] == 0 and channel["id"] != 0:
-                invite_link = await subscription_service.grant_channel_access(user_id, channel["id"])
-                if invite_link:
-                    msg = await message.answer(
-                        Messages.channel_access_granted(channel["name"], invite_link),
-                        parse_mode="HTML"
-                    )
-                    await UserChannelModel.update_message_id(user_id, channel["id"], msg.message_id)
-
-                    await ActionLogModel.log(
-                        ActionLogModel.CHANNEL_ACCESS_GRANTED,
-                        user_id,
-                        f"channel: {channel['name']}"
-                    )
-
     elif status == "reactivated":
         await message.answer(
             Messages.welcome_back(first_name),
