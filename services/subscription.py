@@ -6,7 +6,7 @@ from aiogram.types import ChatMemberMember, ChatMemberAdministrator, ChatMemberO
 from aiogram.exceptions import TelegramBadRequest
 
 from config import MAIN_CHANNEL_ID, CHANNELS_CONFIG
-from database.models import UserModel, ChannelModel, UserChannelModel, UserModelExtended
+from database.models import UserModel, ChannelModel, UserChannelModel, UserModelExtended, ActionLogModel
 from utils.helpers import days_since, parse_date
 
 logger = logging.getLogger(__name__)
@@ -104,6 +104,103 @@ class SubscriptionService:
 
         return message_ids
 
+    async def revoke_unqualified_channel_access(self, user_id: int, channel_id: int, channel_name: str) -> Optional[int]:
+        """
+        Отозвать доступ пользователя к каналу, если он не соответствует требованиям.
+        Возвращает message_id для удаления или None.
+        """
+        # Получаем message_id перед удалением
+        channels = await UserChannelModel.get_user_channels(user_id)
+        message_id = None
+        for ch in channels:
+            if ch["channel_id"] == channel_id:
+                message_id = ch.get("message_id")
+                break
+
+        # Удаляем запись о доступе из БД
+        await UserChannelModel.revoke_access(user_id, channel_id)
+
+        # Удаляем пользователя из канала (ban + unban)
+        try:
+            await self.bot.ban_chat_member(channel_id, user_id)
+            await self.bot.unban_chat_member(channel_id, user_id, only_if_banned=True)
+            logger.info(f"Пользователь {user_id} удалён из канала {channel_name} (недостаточно дней подписки)")
+        except TelegramBadRequest as e:
+            logger.warning(f"Не удалось удалить пользователя {user_id} из канала {channel_id}: {e}")
+
+        # Уведомляем пользователя
+        try:
+            await self.bot.send_message(
+                user_id,
+                f"⚠️ <b>Доступ к каналу «{channel_name}» был отозван</b>\n\n"
+                f"Причина: недостаточное количество дней подписки на материнский канал.\n\n"
+                f"Продолжайте подписку, и доступ будет восстановлен автоматически!",
+                parse_mode="HTML"
+            )
+        except TelegramBadRequest as e:
+            logger.warning(f"Не удалось отправить уведомление пользователю {user_id}: {e}")
+
+        return message_id
+
+    async def check_and_revoke_unqualified_access(self) -> dict:
+        """
+        Проверить всех пользователей с доступом к каналам и удалить тех,
+        кто не соответствует требованиям по дням подписки.
+        """
+        stats = {
+            "checked_channels": 0,
+            "revoked_access": 0,
+            "errors": 0
+        }
+
+        for channel_config in CHANNELS_CONFIG:
+            channel_id = channel_config["id"]
+            days_required = channel_config["days_required"]
+            channel_name = channel_config["name"]
+
+            if channel_id == 0:
+                continue
+
+            stats["checked_channels"] += 1
+
+            # Получаем всех пользователей с доступом к этому каналу
+            users_with_access = await UserChannelModel.get_users_with_channel_access(channel_id)
+
+            for user_info in users_with_access:
+                user_id = user_info["user_id"]
+
+                try:
+                    # Проверяем эффективное количество дней
+                    effective_days = await UserModelExtended.get_effective_days(user_id)
+
+                    # Если дней меньше, чем требуется - отзываем доступ
+                    if effective_days < days_required:
+                        message_id = await self.revoke_unqualified_channel_access(
+                            user_id, channel_id, channel_name
+                        )
+
+                        # Удаляем сообщение с invite-ссылкой
+                        if message_id:
+                            try:
+                                await self.bot.delete_message(user_id, message_id)
+                            except Exception as e:
+                                logger.warning(f"Не удалось удалить сообщение {message_id}: {e}")
+
+                        # Логируем
+                        await ActionLogModel.log(
+                            ActionLogModel.CHANNEL_ACCESS_REVOKED,
+                            user_id,
+                            f"channel: {channel_name}, reason: insufficient days ({effective_days} < {days_required})"
+                        )
+
+                        stats["revoked_access"] += 1
+
+                except Exception as e:
+                    logger.error(f"Ошибка при проверке пользователя {user_id} для канала {channel_id}: {e}")
+                    stats["errors"] += 1
+
+        return stats
+
     async def get_available_channels(self, user_id: int) -> List[dict]:
         """
         Получить список каналов, к которым пользователь может получить доступ.
@@ -155,8 +252,14 @@ class SubscriptionService:
             "checked": 0,
             "new_access_granted": 0,
             "deactivated": 0,
+            "unqualified_revoked": 0,
             "errors": 0
         }
+
+        # Сначала проверяем и удаляем пользователей, которые не соответствуют требованиям
+        revoke_stats = await self.check_and_revoke_unqualified_access()
+        stats["unqualified_revoked"] = revoke_stats["revoked_access"]
+        stats["errors"] += revoke_stats["errors"]
 
         active_users = await UserModel.get_active_users()
 

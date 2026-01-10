@@ -22,7 +22,7 @@ CHANNELS_CONFIG = [
     {
         "id": int(os.getenv("CHANNEL_1_ID", "0")),
         "name": os.getenv("CHANNEL_1_NAME", "Модуль 1"),
-        "days_required": 0,  # Сразу после подписки
+        "days_required": 32,  # После 32 дней подписки
     },
     {
         "id": int(os.getenv("CHANNEL_2_ID", "0")),
