@@ -18,12 +18,8 @@ MAIN_CHANNEL_ID = int(os.getenv("MAIN_CHANNEL_ID", "0"))
 
 # Конфигурация дополнительных каналов
 # days_required - количество дней непрерывной подписки для доступа
+# Модуль 1 = материнский канал (MAIN_CHANNEL_ID)
 CHANNELS_CONFIG = [
-    {
-        "id": int(os.getenv("CHANNEL_1_ID", "0")),
-        "name": os.getenv("CHANNEL_1_NAME", "Модуль 1"),
-        "days_required": 0,  # Сразу после подписки (0-31 день)
-    },
     {
         "id": int(os.getenv("CHANNEL_2_ID", "0")),
         "name": os.getenv("CHANNEL_2_NAME", "Модуль 2"),
